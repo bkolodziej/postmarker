@@ -240,15 +240,22 @@ class EmailBatch(Model):
         """
         return [self._construct_email(email, **extra) for email in self.emails]
 
-    def _construct_email(self, email, **extra):
+    def _construct_email(self, email, with_templates=False, **extra):
         """
         Converts incoming data to properly structured dictionary.
         """
+
+        EmailModel = Email
+        if with_templates:
+            EmailModel = EmailTemplate
+
         if isinstance(email, dict):
-            email = Email(manager=self._manager, **email)
+            email = EmailModel(manager=self._manager, **email)
         elif isinstance(email, (MIMEText, MIMEMultipart)):
+            if with_templates:
+                raise ValueError # TODO `from_mime` method not implemented on EmailTemplate
             email = Email.from_mime(email, self._manager)
-        elif not isinstance(email, Email):
+        elif not isinstance(email, EmailModel):
             raise ValueError
         email._update(extra)
         return email.as_dict()
@@ -262,6 +269,17 @@ class EmailBatch(Model):
         """
         emails = self.as_dict(**extra)
         responses = [self._manager._send_batch(*batch) for batch in chunks(emails, self.MAX_SIZE)]
+        return sum(responses, [])
+
+    def send_with_templates(self, **extra):
+        """
+        Sends email batch with templates.
+
+        :return: Information about sent emails.
+        :rtype: `list`
+        """
+        emails = self.as_dict(with_templates=True, **extra)
+        responses = [self._manager._send_batch_with_templates(*batch) for batch in chunks(emails, self.MAX_SIZE)]
         return sum(responses, [])
 
 
@@ -291,6 +309,9 @@ class EmailManager(ModelManager):
         Low-level batch send call.
         """
         return self.call("POST", "/email/batch", data=emails)
+
+    def _send_batch_with_templates(self, *emails):
+        return self.call("POST", "/email/batchWithTemplates", data={'Messages': emails})
 
     def send(
         self,
@@ -405,6 +426,15 @@ class EmailManager(ModelManager):
         :param extra: dictionary with extra arguments for every message in the batch.
         """
         return self.EmailBatch(*emails).send(**extra)
+
+    def send_batch_with_templates(self, *emails, **extra):
+        """
+        Sends an email batch with templates.
+
+        :param emails: :py:class:`Email` instances or dictionaries
+        :param extra: dictionary with extra arguments for every message in the batch.
+        """
+        return self.EmailBatch(*emails).send_with_templates(**extra)
 
     # NOTE. The following methods are included here to expose better interface without need to import relevant classes.
 
